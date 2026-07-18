@@ -1,4 +1,4 @@
-# pdn-net samples — ordinary IP software over packet radio
+# pdn-net samples - ordinary IP software over packet radio
 
 `ip_udp_send.c` is a deliberately boring program: a plain `socket(AF_INET, SOCK_DGRAM)` that
 `sendto()`s one UDP datagram to an IP address you pass on the command line. It has **zero**
@@ -45,32 +45,32 @@ Now run the sample against a 44-net peer whose IP your `pdn-net.json` maps to a 
 ```
 
 The datagram leaves as an AX.25 UI frame (PID 0xCC) to the mapped callsign. **Or literally just
-`ping 44.0.0.2` / `ssh 44.0.0.2` / `mosh 44.0.0.2`** — nothing on your machine knows it's radio.
+`ping 44.0.0.2` / `ssh 44.0.0.2` / `mosh 44.0.0.2`** - nothing on your machine knows it's radio.
 It's just IP going out an interface that happens to be a modem on the other side.
 
 ---
 
-## Native (pdn-libax25) vs tun/IP (pdn-net) — when to use which
+## Native (pdn-libax25) vs tun/IP (pdn-net) - when to use which
 
 pdn exposes **two seams** to ordinary software, and they are for genuinely different jobs.
 
 **Native AF_AX25 shim (`pdn-libax25`).** Your application addresses a **callsign** and speaks
-connected-mode AX.25 (or UI) directly — the way a BBS, `axcall`, `axlisten`, node software, and
+connected-mode AX.25 (or UI) directly - the way a BBS, `axcall`, `axlisten`, node software, and
 the rest of the Linux AX.25 ecosystem already work. There is **no IP overhead**: a frame carries
 your bytes and a pair of callsigns, nothing more. This is the right seam for anything that is
-*natively about callsigns and packet* — connecting to a BBS, running a keyboard-to-keyboard chat,
+*natively about callsigns and packet* - connecting to a BBS, running a keyboard-to-keyboard chat,
 NET/ROM, APRS-adjacent tooling. The application already thinks in callsigns, so you hand it the
 callsign world unchanged.
 
 **tun/IP (`pdn-net`, this repo).** Your application addresses an **IP** and uses ordinary
-sockets. The headline benefit is that **any existing IP software works with no changes at all** —
-`ssh`, `mosh`, `mqtt`, `git`, `ping`, your own UDP tool — because it just opens a socket and the
+sockets. The headline benefit is that **any existing IP software works with no changes at all** -
+`ssh`, `mosh`, `mqtt`, `git`, `ping`, your own UDP tool - because it just opens a socket and the
 kernel routes the packet out `pdn0`. The costs are real and worth stating plainly: you pay
 **IP + UDP/TCP header overhead** on a channel where every byte is expensive; you maintain a
 **callsign ↔ IP map** (the `routes` in `pdn-net.json`); and delivery is **best-effort UI
-datagrams** — there is no link-layer ARQ under you, so end-to-end reliability is the app's job
+datagrams** - there is no link-layer ARQ under you, so end-to-end reliability is the app's job
 (TCP's own retransmit, or an app-level scheme). At 300–9600 baud the realistically usable set is
-**small, latency-tolerant IP**: `mosh` and `ssh`, MQTT, tiny REST/JSON, your own datagram apps —
+**small, latency-tolerant IP**: `mosh` and `ssh`, MQTT, tiny REST/JSON, your own datagram apps -
 **not** the web, TLS-heavy services, or anything chatty.
 
 **Rule of thumb:** if your program knows about **callsigns**, use the **native shim**; if it only
