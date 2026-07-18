@@ -27,6 +27,28 @@ packet.net node may depend on it).
                                                    pdn node ──> radio
 ```
 
+## Interoperability — standard IP-over-AX.25
+
+**On the air, pdn-net speaks standard IP-over-AX.25, not a pdn-private framing.** Each IP packet
+becomes an AX.25 **UI frame** with **PID `0xCC`** and the **raw IP datagram** in the info field —
+byte-for-byte what the Linux kernel (`net/ax25/ax25_ip.c`), KA9Q NOS, JNOS and BPQ have exchanged
+for decades (`0xCC` = ARPA IP, `0xCD` = ARP; datagram/UI mode). A kernel-AX.25 station in datagram
+mode interoperates with pdn given matching callsign routes. The RHPv2 `pid` field carried between
+pdn-net and the node is a **local control detail** ([packet.net#647](https://github.com/packet-net/packet.net/issues/647)) and **never goes on air**.
+
+**Invariant:** the IP datagram sits **raw** in the UI info — **no pdn envelope**. Guarded in the
+bridge (`IpAx25Bridge` forwards the tun packet verbatim as the datagram `data`, PID `0xCC`).
+
+Current interop boundaries (each a tracked follow-on — [packet.net#651](https://github.com/packet-net/packet.net/issues/651)):
+
+- **Datagram/UI mode only** (the AMPRNet/NOS default); virtual-circuit IP (connected I-frames) is not done.
+- **Static IP↔callsign routing**; dynamic AX.25-ARP (PID `0xCD`) is a follow-on — both ends need static routes until then.
+- **No VJ header compression** (PIDs `0x06`/`0x07`) — plain `0xCC`; a VJ peer must disable it.
+- **Small MTU (~256) + IP fragmentation** baseline; reassembling a peer's AX.25-segmented (PID `0x08`) oversize datagram is a follow-on.
+
+Full rationale + the required on-air interop test (both directions vs the `f6fbb-on-kernel` 6.18
+kernel-AX.25 VM): packet.net [`docs/network-integration-adr.md` §9](https://github.com/packet-net/packet.net/blob/main/docs/network-integration-adr.md).
+
 ## Layout
 
 ```
