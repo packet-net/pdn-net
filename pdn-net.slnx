@@ -1,0 +1,9 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Packet.Net/Packet.Net.csproj" />
+    <Project Path="src/pdn-net/pdn-net.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Packet.Net.Tests/Packet.Net.Tests.csproj" />
+  </Folder>
+</Solution>

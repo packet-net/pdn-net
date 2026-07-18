@@ -1,0 +1,11 @@
+{
+  "myCallsign": "N0CALL-10",
+  "rhpAddress": "127.0.0.1:9000",
+  "tunName": "pdn0",
+  "mtu": 256,
+  "routes": [
+    { "ip": "44.0.0.2",    "callsign": "M0LTE-10" },
+    { "ip": "44.0.0.0/24", "callsign": "GB7RDG-10" },
+    { "ip": "44.0.0.0/8",  "callsign": "GB7RDG-10" }
+  ]
+}
