@@ -9,24 +9,25 @@ using Microsoft.Extensions.Logging.Abstractions;
 namespace Packet.Net.Rhp;
 
 /// <summary>
-/// A minimal RHPv2 <c>ax25</c>/<c>dgram</c> client over loopback TCP. It speaks only the datagram
+/// A minimal RHPv2 <c>ax25</c>/<c>custom</c> client over loopback TCP. It speaks only the datagram
 /// subset pdn-net needs — <c>socket</c> / <c>bind</c> / <c>sendto</c> plus inbound <c>recv</c> —
 /// as a framed-JSON TCP client. This keeps pdn-net a clean, self-contained RHPv2 client with no
 /// external protocol dependency; the MIT rhp2lib-net client speaks the same wire and could be
-/// substituted behind <see cref="IRhpDgramClient"/> if a full RHP surface were ever wanted here.
+/// substituted behind <see cref="IRhpCustomClient"/> if a full RHP surface were ever wanted here.
 /// </summary>
 /// <remarks>
-/// Wire contract (pdn rhp2-server, the <c>ax25</c>/<c>dgram</c> seam):
+/// Wire contract (pdn rhp2-server, the <c>ax25</c>/<c>custom</c> seam). In <c>custom</c> mode the
+/// AX.25 PID is the first payload octet (<c>data[0]</c>) — there is no separate <c>pid</c> field:
 /// <list type="bullet">
-/// <item><c>socket{pfam:"ax25",mode:"dgram"}</c> → reply carries a <c>handle</c>.</item>
+/// <item><c>socket{pfam:"ax25",mode:"custom"}</c> → reply carries a <c>handle</c>.</item>
 /// <item><c>bind{handle,local:&lt;callsign&gt;,port:null}</c>.</item>
-/// <item><c>sendto{handle,remote:&lt;dest&gt;,local:&lt;source&gt;,pid:&lt;int&gt;,data:&lt;latin1&gt;}</c>.</item>
-/// <item>inbound <c>recv</c> pushes carry <c>remote</c> (source) / <c>local</c> (dest) / <c>pid</c> / <c>data</c>.</item>
+/// <item><c>sendto{handle,remote:&lt;dest&gt;,local:&lt;source&gt;,data:&lt;latin1&gt;}</c> where <c>data[0]</c> is the PID.</item>
+/// <item>inbound <c>recv</c> pushes carry <c>remote</c> (source) / <c>local</c> (dest) / <c>data</c> (PID = <c>data[0]</c>).</item>
 /// <item>replies echo the request <c>id</c>; async pushes carry a <c>seqno</c> and no <c>id</c>.</item>
 /// <item><c>data</c> is Latin-1, one byte per code unit (never base64).</item>
 /// </list>
 /// </remarks>
-public sealed class RhpDgramClient : IRhpDgramClient
+public sealed class RhpCustomClient : IRhpCustomClient
 {
     /// <summary>The default RHPv2 TCP port.</summary>
     public const int DefaultPort = 9000;
@@ -51,11 +52,11 @@ public sealed class RhpDgramClient : IRhpDgramClient
     public event Action<RhpDatagram>? DatagramReceived;
 
     /// <summary>Creates a client for the node at <paramref name="host"/>:<paramref name="port"/>.</summary>
-    public RhpDgramClient(string host = "127.0.0.1", int port = DefaultPort, ILogger<RhpDgramClient>? log = null)
+    public RhpCustomClient(string host = "127.0.0.1", int port = DefaultPort, ILogger<RhpCustomClient>? log = null)
     {
         _host = host;
         _port = port;
-        _log = log ?? NullLogger<RhpDgramClient>.Instance;
+        _log = log ?? NullLogger<RhpCustomClient>.Instance;
     }
 
     /// <inheritdoc/>
@@ -82,11 +83,11 @@ public sealed class RhpDgramClient : IRhpDgramClient
         {
             ["type"] = "socket",
             ["pfam"] = "ax25",
-            ["mode"] = "dgram",
+            ["mode"] = "custom",
         }, ct).ConfigureAwait(false);
 
         _handle = reply.Handle ?? throw new RhpException("socketReply carried no handle.");
-        _log.LogInformation("RHP ax25/dgram socket opened, handle {Handle}", _handle);
+        _log.LogInformation("RHP ax25/custom socket opened, handle {Handle}", _handle);
     }
 
     /// <inheritdoc/>
@@ -106,19 +107,19 @@ public sealed class RhpDgramClient : IRhpDgramClient
     }
 
     /// <inheritdoc/>
-    public async Task SendUiAsync(string destCallsign, int pid, ReadOnlyMemory<byte> data, CancellationToken ct = default)
+    public async Task SendAsync(string destCallsign, ReadOnlyMemory<byte> data, CancellationToken ct = default)
     {
         EnsureConnected();
         if (_localCallsign is null)
-            throw new RhpException("SendUiAsync before BindAsync — no source callsign bound.");
+            throw new RhpException("SendAsync before BindAsync — no source callsign bound.");
 
+        // custom mode: the PID rides as data[0]; there is no separate pid wire field.
         await RequestAsync(new JsonObject
         {
             ["type"] = "sendto",
             ["handle"] = _handle,
             ["remote"] = destCallsign,
             ["local"] = _localCallsign,
-            ["pid"] = pid,
             ["data"] = Latin1Codec.ToWireString(data.Span),
         }, ct).ConfigureAwait(false);
     }
@@ -233,9 +234,9 @@ public sealed class RhpDgramClient : IRhpDgramClient
     {
         string source = root.TryGetProperty("remote", out var r) ? r.GetString() ?? "" : "";
         string dest = root.TryGetProperty("local", out var l) ? l.GetString() ?? "" : "";
-        int pid = root.TryGetProperty("pid", out var p) && p.TryGetInt32(out int pv) ? pv : 0;
+        // custom mode: no pid field — the PID is data[0] of the payload we surface verbatim.
         string data = root.TryGetProperty("data", out var d) ? d.GetString() ?? "" : "";
-        return new RhpDatagram(source, dest, pid, Latin1Codec.FromWireString(data));
+        return new RhpDatagram(source, dest, Latin1Codec.FromWireString(data));
     }
 
     /// <inheritdoc/>

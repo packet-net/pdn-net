@@ -11,9 +11,12 @@ namespace Packet.Net.Bridge;
 /// pdn node.
 /// <list type="bullet">
 /// <item><b>Outbound</b>: read a packet from the TUN → parse the IPv4 destination (header bytes
-/// 16–19) → resolve a callsign → <c>sendto(callsign, pid 0xCC, ipBytes)</c>.</item>
-/// <item><b>Inbound</b>: an RHPv2 <c>recv</c> with PID 0xCC → write the IP bytes back to the TUN.</item>
+/// 16–19) → resolve a callsign → <c>sendto(callsign, [0xCC] ++ ipBytes)</c> on the custom socket.</item>
+/// <item><b>Inbound</b>: an RHPv2 <c>recv</c> whose <c>data[0]</c> is PID 0xCC → strip the PID octet
+/// and write the IP bytes back to the TUN.</item>
 /// </list>
+/// The AX.25 PID rides as the first payload octet (<c>data[0]</c>) per RHPv2 <c>custom</c> mode; the
+/// on-air framing is unchanged (a UI frame, PID 0xCC, raw IP info field).
 /// No IP stack is involved: only the destination address is read out of the header; the local
 /// kernel does the rest once the packet reaches the interface.
 /// </summary>
@@ -28,14 +31,14 @@ public sealed class IpAx25Bridge
     private const int MinIpv4HeaderLength = 20;
 
     private readonly ITunDevice _tun;
-    private readonly IRhpDgramClient _rhp;
+    private readonly IRhpCustomClient _rhp;
     private readonly CallsignResolver _resolver;
     private readonly int _maxPacketBytes;
     private readonly ILogger _log;
 
-    /// <summary>Creates the bridge over an open TUN device and a bound RHP dgram client.</summary>
+    /// <summary>Creates the bridge over an open TUN device and a bound RHP custom client.</summary>
     /// <param name="tun">The TUN interface.</param>
-    /// <param name="rhp">A connected + bound RHP dgram client.</param>
+    /// <param name="rhp">A connected + bound RHP custom client.</param>
     /// <param name="resolver">The IP→callsign resolver.</param>
     /// <param name="maxPacketBytes">
     /// Largest IP packet accepted on egress. A larger packet is dropped (fragmentation is a TODO);
@@ -44,7 +47,7 @@ public sealed class IpAx25Bridge
     /// <param name="log">Optional logger.</param>
     public IpAx25Bridge(
         ITunDevice tun,
-        IRhpDgramClient rhp,
+        IRhpCustomClient rhp,
         CallsignResolver resolver,
         int maxPacketBytes = 256,
         ILogger<IpAx25Bridge>? log = null)
@@ -99,8 +102,9 @@ public sealed class IpAx25Bridge
     }
 
     /// <summary>
-    /// Forwards a single outbound IP packet: validate IPv4 → resolve dest callsign → sendto PID 0xCC.
-    /// Drops (with a log line) on non-IPv4, over-MTU, or no matching route. Exposed for tests.
+    /// Forwards a single outbound IP packet: validate IPv4 → resolve dest callsign → sendto with the
+    /// PID 0xCC octet prepended (<c>data = [0xCC] ++ ipBytes</c>). Drops (with a log line) on
+    /// non-IPv4, over-MTU, or no matching route. Exposed for tests.
     /// </summary>
     public async Task ForwardOutboundAsync(ReadOnlyMemory<byte> packet, CancellationToken ct)
     {
@@ -140,29 +144,45 @@ public sealed class IpAx25Bridge
             return;
         }
 
-        await _rhp.SendUiAsync(callsign, PidIp, packet, ct).ConfigureAwait(false);
+        // custom mode: the PID rides as data[0], so prepend 0xCC to the raw IP datagram. The on-air
+        // UI framing is unchanged — this is only how the local client↔node RHP wire carries the PID.
+        var framed = new byte[length + 1];
+        framed[0] = (byte)PidIp;
+        packet.Span.CopyTo(framed.AsSpan(1));
+
+        await _rhp.SendAsync(callsign, framed, ct).ConfigureAwait(false);
         _log.LogDebug("→ {Callsign} pid 0x{Pid:X2} ({Length} bytes) for {Dest}",
             callsign, PidIp, length, destText);
     }
 
     /// <summary>
-    /// Handles one inbound datagram: PID 0xCC is written verbatim to the TUN; 0xCD (ARP) and other
-    /// PIDs are logged and ignored. Exposed for tests.
+    /// Handles one inbound datagram. In custom mode the PID is <c>data[0]</c>: PID 0xCC has its PID
+    /// octet stripped and <c>data[1..]</c> written verbatim to the TUN; 0xCD (ARP) and other PIDs are
+    /// logged and ignored. An empty datagram is dropped. Exposed for tests.
     /// </summary>
     public async Task HandleInboundAsync(RhpDatagram dg, CancellationToken ct)
     {
-        switch (dg.Pid)
+        if (dg.Data.IsEmpty)
+        {
+            _log.LogDebug("Ignoring empty datagram from {Source}", dg.Source);
+            return;
+        }
+
+        int pid = dg.Data.Span[0];
+        switch (pid)
         {
             case PidIp:
-                await _tun.WritePacketAsync(dg.Data, ct).ConfigureAwait(false);
-                _log.LogDebug("← {Source} pid 0x{Pid:X2} ({Length} bytes)", dg.Source, dg.Pid, dg.Data.Length);
+                // Strip the PID octet; the IP datagram is data[1..].
+                ReadOnlyMemory<byte> ip = dg.Data[1..];
+                await _tun.WritePacketAsync(ip, ct).ConfigureAwait(false);
+                _log.LogDebug("← {Source} pid 0x{Pid:X2} ({Length} bytes)", dg.Source, pid, ip.Length);
                 break;
             case PidArp:
                 // TODO: answer ARP (0xCD) so a subnet route (not just /32) works over tun.
                 _log.LogDebug("Ignoring ARP (pid 0xCD) from {Source} — not implemented", dg.Source);
                 break;
             default:
-                _log.LogDebug("Ignoring pid 0x{Pid:X2} from {Source}", dg.Pid, dg.Source);
+                _log.LogDebug("Ignoring pid 0x{Pid:X2} from {Source}", pid, dg.Source);
                 break;
         }
     }

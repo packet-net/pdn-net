@@ -3,7 +3,7 @@
 **A TUN/IP host stack that runs ordinary, unmodified Linux IP software over packet radio.**
 
 `pdn-net` brings up a `pdn0` **TUN** interface and bridges IP packets ⇄ **AX.25 UI frames**
-(RHPv2 `ax25`/`dgram`) through a [pdn](https://github.com/packet-net/packet.net) node. Your
+(RHPv2 `ax25`/`custom`) through a [pdn](https://github.com/packet-net/packet.net) node. Your
 `ssh`, `mosh`, `mqtt`, `ping`, or home-grown UDP app opens a normal socket; the kernel routes it
 out `pdn0`; pdn-net carries each IP packet to the callsign mapped to its destination address.
 Nothing in the application knows it's talking over radio.
@@ -22,7 +22,7 @@ packet.net node may depend on it).
  ordinary IP app ──socket──> kernel ──route 44/8──> pdn0 (TUN)
                                                        │
                                               Packet.Net bridge
-                                                       │  RHPv2 ax25/dgram (loopback TCP:9000)
+                                                       │  RHPv2 ax25/custom (loopback TCP:9000)
                                                        ▼
                                                    pdn node ──> radio
 ```
@@ -33,8 +33,14 @@ packet.net node may depend on it).
 becomes an AX.25 **UI frame** with **PID `0xCC`** and the **raw IP datagram** in the info field -
 byte-for-byte what the Linux kernel (`net/ax25/ax25_ip.c`), KA9Q NOS, JNOS and BPQ have exchanged
 for decades (`0xCC` = ARPA IP, `0xCD` = ARP; datagram/UI mode). A kernel-AX.25 station in datagram
-mode interoperates with pdn given matching callsign routes. The RHPv2 `pid` field carried between
-pdn-net and the node is a **local control detail** ([packet.net#647](https://github.com/packet-net/packet.net/issues/647)) and **never goes on air**.
+mode interoperates with pdn given matching callsign routes.
+
+Between pdn-net and the node the PID is carried as the **first payload octet (`data[0]`)** of an
+RHPv2 **`custom`** socket, with no pdn-specific wire field. The client↔node wire is therefore
+**portable to any compliant RHPv2 host** ([packet.net#647](https://github.com/packet-net/packet.net/issues/647), **resolved**). This `data[0]` carriage
+is G8PZT's clarification of how `custom` mode conveys a PID, not spec text: PWP-0222 §1.2 defines
+`custom` only as "user specified protocol", leaving the framing to the application. None of it goes
+on air; the on-air frame stays an unchanged UI frame (PID `0xCC`, raw IP in the info field).
 
 **Invariant:** the IP datagram sits **raw** in the UI info - **no pdn envelope**. Guarded in the
 bridge (`IpAx25Bridge` forwards the tun packet verbatim as the datagram `data`, PID `0xCC`).
@@ -54,7 +60,7 @@ kernel-AX.25 VM): packet.net [`docs/network-integration-adr.md` §9](https://git
 ```
 src/Packet.Net/          the library
   Tun/                   ITunDevice + TunDevice (/dev/net/tun P/Invoke) + fakes for tests
-  Rhp/                   minimal RHPv2 ax25/dgram client (framing, Latin-1 codec, socket/bind/sendto/recv)
+  Rhp/                   minimal RHPv2 ax25/custom client (framing, Latin-1 codec, socket/bind/sendto/recv)
   Routing/               PdnNetConfig + CallsignResolver (IP/CIDR → callsign, longest-prefix)
   Bridge/                IpAx25Bridge - the TUN ⇄ UI-datagram bridge
 src/pdn-net/             the daemon (Program.cs): config + tun + rhp client + bridge
