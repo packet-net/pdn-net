@@ -12,6 +12,13 @@ public sealed class PdnNetConfig
     [JsonPropertyName("myCallsign")]
     public string MyCallsign { get; init; } = "N0CALL";
 
+    /// <summary>
+    /// This node's IPv4 address on the TUN interface (e.g. "44.0.0.1"). Used to answer inbound
+    /// AX.25-ARP requests. Optional: if unset, ARP replies are not sent.
+    /// </summary>
+    [JsonPropertyName("myIp")]
+    public string? MyIp { get; init; }
+
     /// <summary>The pdn node's RHPv2 endpoint as <c>host:port</c> (default <c>127.0.0.1:9000</c>).</summary>
     [JsonPropertyName("rhpAddress")]
     public string RhpAddress { get; init; } = "127.0.0.1:9000";
