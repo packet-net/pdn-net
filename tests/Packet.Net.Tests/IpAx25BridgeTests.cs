@@ -123,7 +123,7 @@ public class IpAx25BridgeTests
     }
 
     [Fact]
-    public async Task An_oversize_packet_is_dropped_pending_fragmentation()
+    public async Task An_oversize_packet_is_fragmented_into_multiple_sends()
     {
         var tun = new FakeTunDevice();
         var rhp = new FakeRhpCustomClient();
@@ -131,7 +131,13 @@ public class IpAx25BridgeTests
 
         await bridge.ForwardOutboundAsync(Ipv4("44.0.0.2", length: 200), CancellationToken.None);
 
-        rhp.Sends.Should().BeEmpty();
+        rhp.Sends.Should().HaveCountGreaterThan(1, "the oversize packet must be fragmented");
+        foreach (var sent in rhp.Sends)
+        {
+            sent.DestCallsign.Should().Be("M0LTE-10");
+            sent.Data[0].Should().Be(IpAx25Bridge.PidIp);
+            (sent.Data.Length - 1).Should().BeLessThanOrEqualTo(64);
+        }
     }
 
     [Fact]
