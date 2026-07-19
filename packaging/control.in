@@ -1,0 +1,18 @@
+Package: pdn-net
+Version: @VERSION@
+Architecture: @ARCH@
+Maintainer: Tom Fanning <tom@m0lte.uk>
+Depends: libc6, libgcc-s1, libstdc++6
+Recommends: packetnet, iproute2
+Section: net
+Priority: optional
+Homepage: https://github.com/packet-net/pdn-net
+Description: IP-over-packet-radio TUN host stack (pdn-net)
+ Brings up a pdn0 TUN interface and bridges IP packets to and from AX.25 UI
+ frames (standard IP-over-AX.25, PID 0xCC) through a Packet.NET (pdn) node over
+ RHPv2. Ordinary Linux IP software - ssh, mosh, mqtt, ping - runs unmodified
+ over packet radio; nothing in the application knows it is talking over radio.
+ .
+ Self-contained: bundles its own .NET runtime, so no system .NET is required.
+ The systemd unit ships DISABLED - configure /etc/pdn-net/pdn-net.json and
+ assign the pdn0 interface an address, then `systemctl enable --now pdn-net`.

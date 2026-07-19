@@ -70,7 +70,31 @@ dotnet build --configuration Release
 dotnet test  --configuration Release
 ```
 
-## Run
+## Install (Debian/Ubuntu .deb)
+
+Self-contained `.deb`s (bundle their own .NET runtime - no system runtime needed) for
+**amd64 / arm64 / armhf** are attached to each [GitHub Release](https://github.com/packet-net/pdn-net/releases).
+
+```sh
+sudo apt install ./pdn-net_0.1.0_amd64.deb      # arm64 / armhf also published
+```
+
+The package installs the daemon under `/opt/pdn-net/app` (wrapper at `/usr/bin/pdn-net`),
+an example config at `/etc/pdn-net/pdn-net.json`, and a systemd unit that ships **disabled**.
+Configure it, then enable:
+
+```sh
+sudoedit /etc/pdn-net/pdn-net.json              # set myCallsign, rhpAddress, routes
+sudo systemctl enable --now pdn-net             # runs as root (needs CAP_NET_ADMIN for TUN)
+sudo ip addr add 44.0.0.1/32 dev pdn0           # assign this station's pdn0 address
+sudo ip link set pdn0 up mtu 256
+sudo ip route add 44.0.0.0/8 dev pdn0
+```
+
+The `.deb`s are built by `packaging/build-deb.sh` and released by `.github/workflows/release.yml`
+(triggered by a `v*` tag). To build one locally: `packaging/build-deb.sh linux-x64 0.1.0`.
+
+## Run (from source)
 
 ```sh
 sudo setcap cap_net_admin+ep $(command -v pdn-net)   # or run as root

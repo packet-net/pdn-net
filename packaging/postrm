@@ -1,0 +1,17 @@
+#!/bin/sh
+set -e
+
+case "$1" in
+  purge)
+    if command -v deb-systemd-helper >/dev/null 2>&1; then
+      deb-systemd-helper purge pdn-net.service >/dev/null 2>&1 || true
+      deb-systemd-helper unmask pdn-net.service >/dev/null 2>&1 || true
+    fi
+    ;;
+esac
+
+if [ -d /run/systemd/system ]; then
+  systemctl daemon-reload >/dev/null 2>&1 || true
+fi
+
+exit 0

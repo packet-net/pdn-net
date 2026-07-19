@@ -1,0 +1,26 @@
+#!/bin/sh
+set -e
+
+case "$1" in
+  configure)
+    # Register the unit with systemd but DO NOT enable or start it. pdn-net ships
+    # disabled by design: the operator edits /etc/pdn-net/pdn-net.json and assigns
+    # the pdn0 interface an address FIRST, then runs `systemctl enable --now pdn-net`.
+    if command -v deb-systemd-helper >/dev/null 2>&1; then
+      deb-systemd-helper unmask pdn-net.service >/dev/null 2>&1 || true
+      # update-state records the install WITHOUT enabling (no `enable`, no `--now`).
+      deb-systemd-helper update-state pdn-net.service >/dev/null 2>&1 || true
+    fi
+    ;;
+esac
+
+if [ -d /run/systemd/system ]; then
+  systemctl daemon-reload >/dev/null 2>&1 || true
+  # On an upgrade ($2 = old version), bounce the unit ONLY if the operator had it
+  # running — a disabled/stopped unit stays stopped.
+  if [ -n "${2:-}" ]; then
+    systemctl try-restart pdn-net.service >/dev/null 2>&1 || true
+  fi
+fi
+
+exit 0

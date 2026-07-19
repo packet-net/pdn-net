@@ -1,0 +1,53 @@
+[Unit]
+Description=pdn-net - IP-over-packet-radio TUN host stack
+Documentation=https://github.com/packet-net/pdn-net
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=exec
+ExecStart=/usr/bin/pdn-net --config /etc/pdn-net/pdn-net.json
+WorkingDirectory=/opt/pdn-net/app
+Restart=on-failure
+RestartSec=5
+
+# Run as root. Creating the pdn0 TUN interface (open /dev/net/tun + ioctl TUNSETIFF)
+# needs CAP_NET_ADMIN, and root is the simplest way to hold it for the TUN device.
+# (A dedicated system user + AmbientCapabilities=CAP_NET_ADMIN also works; root is
+# chosen here for turnkey simplicity. Documented in packaging/pdn-net.json.example.)
+User=root
+
+# Keep the capability explicit and cap the ceiling: the service (even as root) may
+# hold only CAP_NET_ADMIN and nothing else. Ambient re-grants it after NoNewPrivileges.
+AmbientCapabilities=CAP_NET_ADMIN
+CapabilityBoundingSet=CAP_NET_ADMIN
+
+# The tun char device must be reachable. Setting any DeviceAllow whitelists device
+# access to exactly these nodes (plus the standard /dev/null,zero,full,random,urandom,tty).
+# Do NOT add PrivateDevices=true here - it would hide /dev/net/tun and break start-up.
+DeviceAllow=/dev/net/tun rw
+
+# A writable HOME for the .NET runtime; the rest of the FS stays read-only.
+RuntimeDirectory=pdn-net
+Environment=HOME=/run/pdn-net
+Environment=DOTNET_CLI_TELEMETRY_OPTOUT=1
+Environment=DOTNET_gcServer=0
+
+# --- sandboxing (kept compatible with the TUN device) ---
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ProtectControlGroups=true
+ProtectKernelTunables=true
+# pdn-net's only sockets are the RHPv2 TCP link to the node (AF_INET/AF_INET6).
+# AF_NETLINK/AF_UNIX are allowed for the .NET runtime's own housekeeping.
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
+
+# After the service is running, the operator assigns pdn0 an address and route, e.g.:
+#   sudo ip addr add 44.0.0.1/32 dev pdn0
+#   sudo ip link set pdn0 up mtu 256
+#   sudo ip route add 44.0.0.0/8 dev pdn0
+
+[Install]
+WantedBy=multi-user.target

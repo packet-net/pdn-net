@@ -1,0 +1,32 @@
+// pdn-net configuration -- /etc/pdn-net/pdn-net.json
+//
+// Edit this file, then bring up the interface and enable the service:
+//   sudo systemctl enable --now pdn-net
+//   sudo ip addr add 44.0.0.1/32 dev pdn0        # your station's IP on pdn0
+//   sudo ip link set pdn0 up mtu 256
+//   sudo ip route add 44.0.0.0/8 dev pdn0        # route AMPRNet out pdn0
+//
+// pdn-net's JSON parser tolerates // comments and trailing commas.
+{
+  // Your station callsign-SSID, bound as the source AX.25 address on the node.
+  // CHANGE THIS -- the placeholder N0CALL will not pass on air.
+  "myCallsign": "N0CALL-10",
+
+  // The pdn node's RHPv2 endpoint (host:port). Usually a node on this host.
+  "rhpAddress": "127.0.0.1:9000",
+
+  // The TUN interface pdn-net creates.
+  "tunName": "pdn0",
+
+  // Interface MTU, in bytes. Kept small for a byte-starved radio channel;
+  // the bridge drops any IP packet larger than this (fragmentation is a TODO).
+  "mtu": 256,
+
+  // IP -> callsign routes (longest-prefix wins at lookup). Replace the examples
+  // below with your network's mapping and uncomment them.
+  "routes": [
+    // { "ip": "44.0.0.2",    "callsign": "M0LTE-10"  },
+    // { "ip": "44.0.0.0/24", "callsign": "GB7RDG-10" },
+    // { "ip": "44.0.0.0/8",  "callsign": "GB7RDG-10" }
+  ]
+}
