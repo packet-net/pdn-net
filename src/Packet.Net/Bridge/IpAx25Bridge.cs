@@ -1,5 +1,7 @@
+using System.Net;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using Packet.Net.Arp;
 using Packet.Net.Rhp;
 using Packet.Net.Routing;
 using Packet.Net.Tun;
@@ -35,6 +37,9 @@ public sealed class IpAx25Bridge
     private readonly CallsignResolver _resolver;
     private readonly int _maxPacketBytes;
     private readonly ILogger _log;
+    private readonly string _myCallsign;
+    private readonly byte[]? _myIp;
+    private readonly ArpCache _arpCache;
 
     /// <summary>Creates the bridge over an open TUN device and a bound RHP custom client.</summary>
     /// <param name="tun">The TUN interface.</param>
@@ -44,18 +49,27 @@ public sealed class IpAx25Bridge
     /// Largest IP packet accepted on egress. A larger packet is dropped (fragmentation is a TODO);
     /// keep the interface MTU at or below this. Also bounds the TUN read buffer.
     /// </param>
+    /// <param name="myCallsign">This node's callsign (for ARP replies).</param>
+    /// <param name="myIp">This node's IPv4 address bytes (for ARP replies). Null disables ARP.</param>
+    /// <param name="arpCache">Shared ARP cache for learned IP→callsign mappings.</param>
     /// <param name="log">Optional logger.</param>
     public IpAx25Bridge(
         ITunDevice tun,
         IRhpCustomClient rhp,
         CallsignResolver resolver,
         int maxPacketBytes = 256,
+        string myCallsign = "N0CALL",
+        byte[]? myIp = null,
+        ArpCache? arpCache = null,
         ILogger<IpAx25Bridge>? log = null)
     {
         _tun = tun;
         _rhp = rhp;
         _resolver = resolver;
         _maxPacketBytes = Math.Max(maxPacketBytes, MinIpv4HeaderLength);
+        _myCallsign = myCallsign;
+        _myIp = myIp;
+        _arpCache = arpCache ?? new ArpCache();
         _log = log ?? NullLogger<IpAx25Bridge>.Instance;
     }
 
@@ -138,7 +152,7 @@ public sealed class IpAx25Bridge
         ReadOnlySpan<byte> dest = span.Slice(16, 4);
         string destText = FormatIp(dest);
         int length = span.Length;
-        if (!_resolver.TryResolve(dest, out string callsign))
+        if (!_resolver.TryResolve(dest, out string callsign) && !_arpCache.TryResolve(dest, out callsign))
         {
             _log.LogDebug("No route for {Dest} — dropping", destText);
             return;
@@ -178,13 +192,44 @@ public sealed class IpAx25Bridge
                 _log.LogDebug("← {Source} pid 0x{Pid:X2} ({Length} bytes)", dg.Source, pid, ip.Length);
                 break;
             case PidArp:
-                // TODO: answer ARP (0xCD) so a subnet route (not just /32) works over tun.
-                _log.LogDebug("Ignoring ARP (pid 0xCD) from {Source} — not implemented", dg.Source);
+                await HandleArpAsync(dg, ct).ConfigureAwait(false);
                 break;
             default:
                 _log.LogDebug("Ignoring pid 0x{Pid:X2} from {Source}", pid, dg.Source);
                 break;
         }
+    }
+
+    private async Task HandleArpAsync(RhpDatagram dg, CancellationToken ct)
+    {
+        ReadOnlySpan<byte> payload = dg.Data.Span[1..];
+        if (!ArpPacket.TryParse(payload, out var arp))
+        {
+            _log.LogDebug("Ignoring malformed ARP from {Source}", dg.Source);
+            return;
+        }
+
+        // Learn the sender's IP→callsign mapping regardless of opcode.
+        string senderCall = Ax25Address.Decode(arp.SenderHw);
+        if (senderCall.Length > 0)
+            _arpCache.Learn(arp.SenderProto, senderCall);
+
+        if (arp.Operation != ArpPacket.OpRequest || _myIp is null)
+            return;
+
+        // Answer only if the target protocol address is ours.
+        if (!arp.TargetProto.SequenceEqual(_myIp))
+            return;
+
+        byte[] reply = ArpPacket.BuildReply(_myCallsign, _myIp, arp.SenderHw, arp.SenderProto);
+        string targetIpText = FormatIp(arp.TargetProto);
+        var framed = new byte[reply.Length + 1];
+        framed[0] = (byte)PidArp;
+        reply.CopyTo(framed, 1);
+
+        await _rhp.SendAsync(dg.Source, framed, ct).ConfigureAwait(false);
+        _log.LogDebug("← ARP request from {Source} ({SenderCall}) for {Ip} → replied",
+            dg.Source, senderCall, targetIpText);
     }
 
     private void OnDatagramReceived(RhpDatagram dg)

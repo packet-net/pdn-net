@@ -88,8 +88,12 @@ internal static class Program
         }
 
         // 3) The bridge.
+        byte[]? myIpBytes = config.MyIp is not null
+            ? System.Net.IPAddress.Parse(config.MyIp).GetAddressBytes()
+            : null;
         var bridge = new IpAx25Bridge(tun, rhp, CallsignResolver.FromConfig(config),
-            config.Mtu, loggerFactory.CreateLogger<IpAx25Bridge>());
+            config.Mtu, config.MyCallsign, myIpBytes,
+            log: loggerFactory.CreateLogger<IpAx25Bridge>());
 
         log.LogInformation("Bridge running — IP ⇄ AX.25 UI (pid 0x{Pid:X2}). Ctrl+C to stop.", IpAx25Bridge.PidIp);
         try
