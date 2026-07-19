@@ -48,9 +48,9 @@ bridge (`IpAx25Bridge` forwards the tun packet verbatim as the datagram `data`, 
 Current interop boundaries (each a tracked follow-on - [packet.net#651](https://github.com/packet-net/packet.net/issues/651)):
 
 - **Datagram/UI mode only** (the AMPRNet/NOS default); virtual-circuit IP (connected I-frames) is not done.
-- **Static IP↔callsign routing**; dynamic AX.25-ARP (PID `0xCD`) is a follow-on - both ends need static routes until then.
+- **AX.25-ARP (PID `0xCD`)** is answered for configured addresses; learned mappings supplement static routes.
 - **No VJ header compression** (PIDs `0x06`/`0x07`) - plain `0xCC`; a VJ peer must disable it.
-- **Small MTU (~256) + IP fragmentation** baseline; reassembling a peer's AX.25-segmented (PID `0x08`) oversize datagram is a follow-on.
+- **IP fragmentation** on egress (RFC 791) and **AX.25-segmented (PID `0x08`) reassembly** on ingress are supported; the interface MTU can exceed the per-frame ceiling.
 
 Full rationale + the required on-air interop test (both directions vs the `f6fbb-on-kernel` 6.18
 kernel-AX.25 VM): packet.net [`docs/network-integration-adr.md` §9](https://github.com/packet-net/packet.net/blob/main/docs/network-integration-adr.md).
@@ -62,11 +62,12 @@ src/Packet.Net/          the library
   Tun/                   ITunDevice + TunDevice (/dev/net/tun P/Invoke) + fakes for tests
   Rhp/                   minimal RHPv2 ax25/custom client (framing, Latin-1 codec, socket/bind/sendto/recv)
   Routing/               PdnNetConfig + CallsignResolver (IP/CIDR → callsign, longest-prefix)
-  Bridge/                IpAx25Bridge - the TUN ⇄ UI-datagram bridge
+  Arp/                   AX.25-ARP (PID 0xCD): packet codec, address encoding, learned IP→callsign cache
+  Bridge/                IpAx25Bridge - the TUN ⇄ UI-datagram bridge (+ IPv4 fragmenter, AX.25 reassembler)
 src/pdn-net/             the daemon (Program.cs): config + tun + rhp client + bridge
 tests/Packet.Net.Tests/  xunit + AwesomeAssertions
 samples/                 ip_udp_send.c (SPDX 0BSD) + the bring-up / "when to use which" doc
-pdn-net.json             sample config (myCallsign, rhpAddress, mtu, routes)
+pdn-net.json             sample config (myCallsign, myIp, rhpAddress, mtu, routes)
 ```
 
 ## Build & test
@@ -111,16 +112,13 @@ sudo ip route add 44.0.0.0/8 dev pdn0
 ping 44.0.0.2      # or ssh / mosh / your app - nothing knows it's radio
 ```
 
-## Status: walking skeleton
+## Status
 
 Real code, green tests, honest stubs. Known limitations / TODO (prioritised):
 
-1. **IP fragmentation for packets > MTU** - the skeleton relies on a small interface MTU (~256) +
-   path-MTU; oversize egress packets are dropped with a warning, not fragmented.
-2. **ARP (PID 0xCD)** - inbound ARP is logged and ignored; a `/32` point-to-point config needs no
-   ARP, but subnet-style use will.
-3. **Dynamic routing** - the IP→callsign map is static config; no discovery/advertisement.
-4. **Cross-platform TUN** - `TunDevice` is Linux-only (`/dev/net/tun`); macOS `utun` / Windows
+1. **Dynamic routing** - the IP→callsign map is static config (+ ARP-learned entries); no
+   discovery/advertisement protocol for multi-hop.
+2. **Cross-platform TUN** - `TunDevice` is Linux-only (`/dev/net/tun`); macOS `utun` / Windows
    Wintun can join behind `ITunDevice`.
-5. **Real-hardware bring-up** - the TUN path needs `CAP_NET_ADMIN`; end-to-end over a live node +
+3. **Real-hardware bring-up** - the TUN path needs `CAP_NET_ADMIN`; end-to-end over a live node +
    radio is not yet exercised in CI (unit tests use a fake TUN + a mock RHP server).

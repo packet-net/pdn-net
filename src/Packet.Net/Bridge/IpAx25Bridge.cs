@@ -50,8 +50,8 @@ public sealed class IpAx25Bridge
     /// <param name="rhp">A connected + bound RHP custom client.</param>
     /// <param name="resolver">The IP→callsign resolver.</param>
     /// <param name="maxPacketBytes">
-    /// Largest IP packet accepted on egress. A larger packet is dropped (fragmentation is a TODO);
-    /// keep the interface MTU at or below this. Also bounds the TUN read buffer.
+    /// Per-fragment ceiling: IP packets larger than this are fragmented (RFC 791) before
+    /// transmission. Also the maximum size of a single UI frame payload on the air.
     /// </param>
     /// <param name="myCallsign">This node's callsign (for ARP replies).</param>
     /// <param name="myIp">This node's IPv4 address bytes (for ARP replies). Null disables ARP.</param>
@@ -100,8 +100,8 @@ public sealed class IpAx25Bridge
     /// </summary>
     public async Task PumpOutboundAsync(CancellationToken ct)
     {
-        // One read buffer sized to the packet ceiling — TUN yields one packet per read.
-        var buffer = new byte[_maxPacketBytes + 4];
+        // Sized for a full IPv4 datagram — the fragmenter splits oversize packets downstream.
+        var buffer = new byte[65535];
         while (!ct.IsCancellationRequested)
         {
             int n;
