@@ -30,6 +30,9 @@ public sealed class IpAx25Bridge
     /// <summary>AX.25 PID for ARP. Not handled yet (TODO): a /32 point-to-point config needs no ARP.</summary>
     public const int PidArp = 0xCD;
 
+    /// <summary>AX.25 PID for segmentation (AX.25 spec §6.3) — carries one segment of a larger payload.</summary>
+    public const int PidSegment = 0x08;
+
     private const int MinIpv4HeaderLength = 20;
 
     private readonly ITunDevice _tun;
@@ -40,6 +43,7 @@ public sealed class IpAx25Bridge
     private readonly string _myCallsign;
     private readonly byte[]? _myIp;
     private readonly ArpCache _arpCache;
+    private readonly Ax25Reassembler _reassembler = new();
 
     /// <summary>Creates the bridge over an open TUN device and a bound RHP custom client.</summary>
     /// <param name="tun">The TUN interface.</param>
@@ -132,18 +136,7 @@ public sealed class IpAx25Bridge
         int version = span[0] >> 4;
         if (version != 4)
         {
-            // IPv6 (0xCC still, but no v6 routing table yet) and anything else are out of scope here.
             _log.LogDebug("Dropping non-IPv4 packet (version {Version})", version);
-            return;
-        }
-
-        if (span.Length > _maxPacketBytes)
-        {
-            // TODO: IP fragmentation for packets larger than one UI frame. For the skeleton we rely
-            // on a small interface MTU + path-MTU discovery; oversize egress is dropped, not split.
-            _log.LogWarning(
-                "Dropping oversize IP packet ({Length} > {Max} bytes) — fragmentation not implemented",
-                span.Length, _maxPacketBytes);
             return;
         }
 
@@ -158,13 +151,29 @@ public sealed class IpAx25Bridge
             return;
         }
 
+        if (length > _maxPacketBytes)
+        {
+            // Fragment the oversize datagram into MTU-sized pieces (RFC 791).
+            var fragments = Ipv4Fragmenter.Fragment(span, _maxPacketBytes);
+            foreach (var frag in fragments)
+            {
+                var framed = new byte[frag.Length + 1];
+                framed[0] = (byte)PidIp;
+                frag.CopyTo(framed, 1);
+                await _rhp.SendAsync(callsign, framed, ct).ConfigureAwait(false);
+            }
+            _log.LogDebug("→ {Callsign} pid 0x{Pid:X2} ({Length} bytes in {Frags} fragments) for {Dest}",
+                callsign, PidIp, length, fragments.Count, destText);
+            return;
+        }
+
         // custom mode: the PID rides as data[0], so prepend 0xCC to the raw IP datagram. The on-air
         // UI framing is unchanged — this is only how the local client↔node RHP wire carries the PID.
-        var framed = new byte[length + 1];
-        framed[0] = (byte)PidIp;
-        packet.Span.CopyTo(framed.AsSpan(1));
+        var single = new byte[length + 1];
+        single[0] = (byte)PidIp;
+        packet.Span.CopyTo(single.AsSpan(1));
 
-        await _rhp.SendAsync(callsign, framed, ct).ConfigureAwait(false);
+        await _rhp.SendAsync(callsign, single, ct).ConfigureAwait(false);
         _log.LogDebug("→ {Callsign} pid 0x{Pid:X2} ({Length} bytes) for {Dest}",
             callsign, PidIp, length, destText);
     }
@@ -190,6 +199,15 @@ public sealed class IpAx25Bridge
                 ReadOnlyMemory<byte> ip = dg.Data[1..];
                 await _tun.WritePacketAsync(ip, ct).ConfigureAwait(false);
                 _log.LogDebug("← {Source} pid 0x{Pid:X2} ({Length} bytes)", dg.Source, pid, ip.Length);
+                break;
+            case PidSegment:
+                // AX.25 segmentation: feed to reassembler; deliver once complete.
+                byte[]? reassembled = _reassembler.AddSegment(dg.Source, dg.Data.Span[1..]);
+                if (reassembled is not null)
+                {
+                    await _tun.WritePacketAsync(reassembled, ct).ConfigureAwait(false);
+                    _log.LogDebug("← {Source} pid 0x08 reassembled ({Length} bytes)", dg.Source, reassembled.Length);
+                }
                 break;
             case PidArp:
                 await HandleArpAsync(dg, ct).ConfigureAwait(false);
