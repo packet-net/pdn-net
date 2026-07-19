@@ -29,14 +29,23 @@ public class IpAx25BridgeTests
         return pkt;
     }
 
-    private static IpAx25Bridge NewBridge(FakeTunDevice tun, FakeRhpDgramClient rhp, int mtu = 256)
+    private static IpAx25Bridge NewBridge(FakeTunDevice tun, FakeRhpCustomClient rhp, int mtu = 256)
         => new(tun, rhp, Resolver(), mtu);
+
+    // The custom-mode payload the bridge exchanges: [pid] ++ the raw datagram bytes.
+    private static byte[] Framed(int pid, byte[] payload)
+    {
+        var framed = new byte[payload.Length + 1];
+        framed[0] = (byte)pid;
+        payload.CopyTo(framed, 1);
+        return framed;
+    }
 
     [Fact]
     public async Task An_ipv4_packet_egresses_as_a_sendto_to_the_resolved_callsign_with_pid_0xCC()
     {
         var tun = new FakeTunDevice();
-        var rhp = new FakeRhpDgramClient();
+        var rhp = new FakeRhpCustomClient();
         var bridge = NewBridge(tun, rhp);
 
         byte[] packet = Ipv4("44.0.0.2");
@@ -45,15 +54,15 @@ public class IpAx25BridgeTests
         rhp.Sends.Should().HaveCount(1);
         var sent = rhp.Sends[0];
         sent.DestCallsign.Should().Be("M0LTE-10");
-        sent.Pid.Should().Be(IpAx25Bridge.PidIp);
-        sent.Data.Should().Equal(packet, "the IP bytes must cross verbatim");
+        sent.Data[0].Should().Be(IpAx25Bridge.PidIp, "custom mode carries the PID as data[0]");
+        sent.Data.Should().Equal(Framed(IpAx25Bridge.PidIp, packet), "the IP bytes must cross verbatim after the PID octet");
     }
 
     [Fact]
     public async Task The_tun_read_loop_forwards_a_queued_packet()
     {
         var tun = new FakeTunDevice();
-        var rhp = new FakeRhpDgramClient();
+        var rhp = new FakeRhpCustomClient();
         var bridge = NewBridge(tun, rhp);
 
         byte[] packet = Ipv4("44.130.1.1"); // matches 44.0.0.0/8 → GB7RDG-10
@@ -64,35 +73,35 @@ public class IpAx25BridgeTests
 
         rhp.Sends.Should().HaveCount(1);
         rhp.Sends[0].DestCallsign.Should().Be("GB7RDG-10");
-        rhp.Sends[0].Data.Should().Equal(packet);
+        rhp.Sends[0].Data.Should().Equal(Framed(IpAx25Bridge.PidIp, packet));
     }
 
     [Fact]
     public async Task An_inbound_ip_datagram_is_written_back_to_the_tun_verbatim()
     {
         var tun = new FakeTunDevice();
-        var rhp = new FakeRhpDgramClient();
+        var rhp = new FakeRhpCustomClient();
         var bridge = NewBridge(tun, rhp);
 
         byte[] ipBytes = Ipv4("44.0.0.9");
-        await bridge.HandleInboundAsync(new RhpDatagram("GB7RDG-10", "N0CALL-10", IpAx25Bridge.PidIp, ipBytes), CancellationToken.None);
+        await bridge.HandleInboundAsync(new RhpDatagram("GB7RDG-10", "N0CALL-10", Framed(IpAx25Bridge.PidIp, ipBytes)), CancellationToken.None);
 
         tun.Written.Should().HaveCount(1);
-        tun.Written[0].Should().Equal(ipBytes);
+        tun.Written[0].Should().Equal(ipBytes, "the PID octet is stripped and data[1..] written verbatim");
     }
 
     [Fact]
     public async Task A_running_bridge_wires_inbound_pushes_through_to_the_tun()
     {
         var tun = new FakeTunDevice();
-        var rhp = new FakeRhpDgramClient();
+        var rhp = new FakeRhpCustomClient();
         var bridge = NewBridge(tun, rhp);
         using var cts = new CancellationTokenSource(Timeout);
 
         Task run = bridge.RunAsync(cts.Token);
 
         byte[] ipBytes = Ipv4("44.0.0.2");
-        rhp.InjectInbound(new RhpDatagram("M0LTE-10", "N0CALL-10", IpAx25Bridge.PidIp, ipBytes));
+        rhp.InjectInbound(new RhpDatagram("M0LTE-10", "N0CALL-10", Framed(IpAx25Bridge.PidIp, ipBytes)));
 
         await WaitUntil(() => tun.Written.Count == 1, cts.Token);
         tun.Written[0].Should().Equal(ipBytes);
@@ -105,7 +114,7 @@ public class IpAx25BridgeTests
     public async Task A_packet_with_no_matching_route_is_dropped()
     {
         var tun = new FakeTunDevice();
-        var rhp = new FakeRhpDgramClient();
+        var rhp = new FakeRhpCustomClient();
         var bridge = NewBridge(tun, rhp);
 
         await bridge.ForwardOutboundAsync(Ipv4("10.1.2.3"), CancellationToken.None);
@@ -117,7 +126,7 @@ public class IpAx25BridgeTests
     public async Task An_oversize_packet_is_dropped_pending_fragmentation()
     {
         var tun = new FakeTunDevice();
-        var rhp = new FakeRhpDgramClient();
+        var rhp = new FakeRhpCustomClient();
         var bridge = NewBridge(tun, rhp, mtu: 64);
 
         await bridge.ForwardOutboundAsync(Ipv4("44.0.0.2", length: 200), CancellationToken.None);
@@ -129,7 +138,7 @@ public class IpAx25BridgeTests
     public async Task A_non_ipv4_packet_is_ignored()
     {
         var tun = new FakeTunDevice();
-        var rhp = new FakeRhpDgramClient();
+        var rhp = new FakeRhpCustomClient();
         var bridge = NewBridge(tun, rhp);
 
         byte[] v6 = new byte[40];
@@ -144,10 +153,10 @@ public class IpAx25BridgeTests
     public async Task An_inbound_arp_datagram_is_not_written_to_the_tun()
     {
         var tun = new FakeTunDevice();
-        var rhp = new FakeRhpDgramClient();
+        var rhp = new FakeRhpCustomClient();
         var bridge = NewBridge(tun, rhp);
 
-        await bridge.HandleInboundAsync(new RhpDatagram("M0LTE-10", "N0CALL-10", IpAx25Bridge.PidArp, new byte[] { 1, 2, 3 }), CancellationToken.None);
+        await bridge.HandleInboundAsync(new RhpDatagram("M0LTE-10", "N0CALL-10", Framed(IpAx25Bridge.PidArp, new byte[] { 1, 2, 3 })), CancellationToken.None);
 
         tun.Written.Should().BeEmpty("ARP (0xCD) handling is a TODO");
     }

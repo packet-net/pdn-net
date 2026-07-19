@@ -8,7 +8,7 @@ namespace Packet.Net.Routing;
 /// </summary>
 public sealed class PdnNetConfig
 {
-    /// <summary>This node's callsign — bound as the local (source) address on the dgram socket.</summary>
+    /// <summary>This node's callsign — bound as the local (source) address on the custom socket.</summary>
     [JsonPropertyName("myCallsign")]
     public string MyCallsign { get; init; } = "N0CALL";
 

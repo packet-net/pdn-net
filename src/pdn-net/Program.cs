@@ -67,8 +67,8 @@ internal static class Program
         log.LogInformation("  configure it with: sudo ip addr add <your-ip>/32 dev {Name} && " +
                            "sudo ip link set {Name2} up mtu {Mtu}", tun.Name, tun.Name, config.Mtu);
 
-        // 2) RHP dgram client — connect + bind our callsign.
-        await using var rhp = new RhpDgramClient(rhpHost, rhpPort, loggerFactory.CreateLogger<RhpDgramClient>());
+        // 2) RHP custom client — connect + bind our callsign.
+        await using var rhp = new RhpCustomClient(rhpHost, rhpPort, loggerFactory.CreateLogger<RhpCustomClient>());
         try
         {
             await rhp.ConnectAsync(cts.Token);
