@@ -2,7 +2,8 @@ name: release
 
 # Builds the pdn-net Debian packages (amd64 / arm64 / armhf) and attaches them to
 # a GitHub Release. Triggered by pushing a `v*` tag (or run by hand via
-# workflow_dispatch). NO apt repo — the .debs live on the Release.
+# workflow_dispatch). Also notifies packet-net/apt so the release reaches the
+# apt repo (see the "Notify apt repo" step below).
 #
 # Self-hosted x64 only (org convention — no GitHub-hosted runners). The arm builds
 # cross-publish self-contained from x64 (the .NET runtime pack per RID comes from
@@ -69,3 +70,25 @@ jobs:
             --repo "${{ github.repository }}" \
             --title "pdn-net v${VERSION}" \
             --notes "IP-over-packet-radio TUN host stack (pdn-net) ${VERSION}. Install the \`.deb\` for your architecture (amd64 / arm64 / armhf) — no .NET runtime required (self-contained): \`sudo apt install ./pdn-net_${VERSION}_<arch>.deb\`. The systemd unit ships DISABLED: edit \`/etc/pdn-net/pdn-net.json\`, then \`sudo systemctl enable --now pdn-net\`. \`SHA256SUMS\` covers all three .debs."
+
+      - name: Tell the apt repo to rebuild
+        # Last, and only after gh release create has succeeded: packet-net/apt indexes whatever
+        # is on releases/latest when it runs, so dispatching before the assets exist would just
+        # make it re-index the previous release.
+        #
+        # A HARD requirement, not fire-and-forget (Tom, 2026-09-18): if this repo cannot tell
+        # packet-net/apt about the release, the build fails rather than shipping quietly with
+        # apt left stale until its next scheduled rebuild.
+        env:
+          GH_TOKEN: ${{ secrets.APT_DISPATCH_TOKEN }}
+          TAG: v${{ steps.v.outputs.version }}
+        run: |
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::error::APT_DISPATCH_TOKEN is not visible to this repo - cannot notify packet-net/apt"
+            exit 1
+          fi
+          # gh api --input - with a JSON body, not -f client_payload[...]=...: gh's -f does not
+          # do curl-style bracket nesting, so the nested object has to arrive as JSON.
+          payload=$(printf '{"event_type":"release-published","client_payload":{"repo":"%s","tag":"%s"}}' \
+            "$GITHUB_REPOSITORY" "$TAG")
+          printf '%s' "$payload" | gh api -X POST repos/packet-net/apt/dispatches --input -
