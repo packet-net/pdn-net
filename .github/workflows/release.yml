@@ -49,6 +49,13 @@ jobs:
             packaging/build-deb.sh "$rid" "$VERSION"
           done
 
+      # Self-contained, so the runtime in each .deb is the runner's SDK's, and a stale runner
+      # ships old security fixes. Fail the release instead.
+      - name: Check the bundled .NET runtime is the latest patch
+        env:
+          VERSION: ${{ steps.v.outputs.version }}
+        run: python3 packaging/check-bundled-runtime.py artifacts/pdn-net_"${VERSION}"_*.deb
+
       - name: Install-smoke the amd64 .deb (Debian-stable + Ubuntu-LTS)
         env:
           VERSION: ${{ steps.v.outputs.version }}
