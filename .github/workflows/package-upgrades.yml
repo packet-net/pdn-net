@@ -18,6 +18,9 @@ jobs:
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Always the default branch: a manual run from a feature branch must not push it to main.
+          ref: main
       - name: Choose where setup-dotnet installs
         if: runner.environment == 'self-hosted'
         run: echo "DOTNET_INSTALL_DIR=$HOME/.dotnet" >> "$GITHUB_ENV"
